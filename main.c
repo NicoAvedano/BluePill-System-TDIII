@@ -32,6 +32,8 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 #define ADC_CHANNEL_COUNT 4
+
+#define POLINOMIO 0x07 // Polinomio generador CRC-8: x^8 + x^2 + x + 1
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -74,33 +76,33 @@ DMA_HandleTypeDef hdma_usart3_rx;
 
 
 /* Definitions for rxTaskHandle */
-osThreadId_t rxTaskHandleHandle;
+osThreadId_t rxTaskHandle;
 const osThreadAttr_t rxTaskHandle_attributes = {
   .name = "rxTaskHandle",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for txTaskHandle */
-osThreadId_t txTaskHandleHandle;
+osThreadId_t txTaskHandle;
 const osThreadAttr_t txTaskHandle_attributes = {
   .name = "txTaskHandle",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for screenTaskHandl */
-osThreadId_t screenTaskHandlHandle;
-const osThreadAttr_t screenTaskHandl_attributes = {
+osThreadId_t screenTaskHandle;
+const osThreadAttr_t screenTaskHandle_attributes = {
   .name = "screenTaskHandl",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for mutexBufferHandle */
-osMutexId_t mutexBufferHandleHandle;
+osMutexId_t mutexBufferHandle;
 const osMutexAttr_t mutexBufferHandle_attributes = {
   .name = "mutexBufferHandle"
 };
 /* Definitions for semRxHandle */
-osSemaphoreId_t semRxHandleHandle;
+osSemaphoreId_t semRxHandle;
 const osSemaphoreAttr_t semRxHandle_attributes = {
   .name = "semRxHandle"
 };
@@ -132,16 +134,18 @@ void StartTask04(void *argument);
 /* USER CODE BEGIN 0 */
 void inicioPantalla(void){
     SSD1306_GotoXY (35,0); SSD1306_Puts("TDIII", &Font_11x18, 1);
-    SSD1306_GotoXY (25, 20); SSD1306_Puts("Avedano", &Font_11x18, 1);
-    SSD1306_GotoXY (15, 40); SSD1306_Puts("Capdevila", &Font_11x18, 1);
+    SSD1306_GotoXY (15,20); SSD1306_Puts("Blue Pill", &Font_11x18, 1);
+    SSD1306_GotoXY (5, 40); SSD1306_Puts("Avedano Capdevila", &Font_7x10, 1);
+    SSD1306_GotoXY (5, 50); SSD1306_Puts(" 91770    90129", &Font_7x10, 1);
+    //SSD1306_GotoXY (15, 40); SSD1306_Puts("Capdevila", &Font_11x18, 1);
     SSD1306_UpdateScreen();
-    HAL_Delay(3000);
+    HAL_Delay(4000);
     SSD1306_Clear();
     SSD1306_GotoXY (10,0); SSD1306_Puts("Bienvenido", &Font_11x18, 1); // print Hello
     SSD1306_GotoXY (55, 20); SSD1306_Puts("al", &Font_11x18, 1);
     SSD1306_GotoXY (25, 40); SSD1306_Puts("Sistema", &Font_11x18, 1);
     SSD1306_UpdateScreen(); // update screen
-    HAL_Delay(2000);
+    HAL_Delay(4000);
 }
 
 void verificacionUART(){
@@ -165,7 +169,7 @@ void verificacionUART(){
 		SSD1306_GotoXY(0, 40); SSD1306_Puts("UART3 RS485", &Font_11x18, 1);
 		SSD1306_UpdateScreen(); // update screen
 	}
-	HAL_Delay(3000);
+	HAL_Delay(4000);
 }
 
 void verificacionBMP(uint8_t id){
@@ -179,7 +183,7 @@ void verificacionBMP(uint8_t id){
 	      SSD1306_GotoXY(0, 20); SSD1306_Puts("ID Correcto", &Font_11x18, 1);
 	      SSD1306_GotoXY(0, 45); SSD1306_Puts("Conectado", &Font_7x10, 1);
 	      SSD1306_UpdateScreen(); // update screen
-	      HAL_Delay(3000);
+	      HAL_Delay(4000);
 	  }
 	  else
 	  {
@@ -306,9 +310,22 @@ uint8_t read_Digital_Inputs(void)
 	return inputs;
 }
 
+uint8_t calcular_crc8(const uint8_t *data, size_t length) {
+    uint8_t crc = 0x00;
+    for (size_t i = 0; i < length; ++i) {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; ++j) {
+            if (crc & 0x80)
+                crc = (crc << 1) ^ POLINOMIO;
+            else
+                crc <<= 1;
+        }
+    }
+    return crc;
+}
 
 void doBuffer(){
-	 osMutexAcquire(mutexBufferHandleHandle, osWaitForever);
+	 osMutexAcquire(mutexBufferHandle, osWaitForever);
 	 uint16_t pwm1 = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_2);
 	 uint16_t pwm2 = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_3);
 	 uint16_t adc0_val= adc_raw[0];
@@ -343,11 +360,12 @@ void doBuffer(){
 		 tx_buf[14] = pressure_hpa;
 		 tx_buf[15] = 0;
 
+		// tx_buf[15] = calcular_crc8(tx_buf, 15);
 	for(int i = 0; i<=13; i++){
 		 tx_buf[15] |= tx_buf[i];
 	 }
 	 actualizarPantalla();
-	 osMutexRelease(mutexBufferHandleHandle);
+	 osMutexRelease(mutexBufferHandle);
 }
 
 /*void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
@@ -393,9 +411,10 @@ void doBuffer(){
 }*/
 void StartRxTask(void *arg) {
     for (;;) {
-        if (osSemaphoreAcquire(semRxHandleHandle, osWaitForever) == osOK) {
+        if (osSemaphoreAcquire(semRxHandle, osWaitForever) == osOK) {
             if (rx_buf[0] == 0xA5) {
                 uint8_t chk = rx_buf[0] | rx_buf[1] | rx_buf[2] | rx_buf[3] | rx_buf[4];
+                // chk = calcular_crc8(rx_buf, 5);
                 if (chk == rx_buf[5]) {
                     uint16_t duty1 = (rx_buf[1] << 4) | (rx_buf[2] >> 4);
                     uint16_t duty2 = ((rx_buf[2] & 0x0F) << 8) | rx_buf[3];
@@ -416,7 +435,7 @@ void StartRxTask(void *arg) {
 }
 void StartTxTask(void *arg) {
     for (;;) {
-        if ((osKernelGetTickCount() - last_receive_time) >= 10000) {
+        if ((osKernelGetTickCount() - last_receive_time) >= 20000) {
             pantalla_estado = 5;
         	doBuffer();
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
@@ -441,7 +460,7 @@ void StartScreenTask(void *arg) {
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == uart) {
-        osSemaphoreRelease(semRxHandleHandle);
+        osSemaphoreRelease(semRxHandle);
     }
 }
 
@@ -517,7 +536,7 @@ int main(void)
   osKernelInitialize();
   /* Create the mutex(es) */
   /* creation of mutexBufferHandle */
-  mutexBufferHandleHandle = osMutexNew(&mutexBufferHandle_attributes);
+  mutexBufferHandle = osMutexNew(&mutexBufferHandle_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -525,7 +544,7 @@ int main(void)
 
   /* Create the semaphores(s) */
   /* creation of semRxHandle */
-  semRxHandleHandle = osSemaphoreNew(1, 0, &semRxHandle_attributes);
+  semRxHandle = osSemaphoreNew(1, 0, &semRxHandle_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -544,13 +563,13 @@ int main(void)
 
 
   /* creation of rxTaskHandle */
-  rxTaskHandleHandle = osThreadNew(StartRxTask, NULL, &rxTaskHandle_attributes);
+  rxTaskHandle = osThreadNew(StartRxTask, NULL, &rxTaskHandle_attributes);
 
   /* creation of txTaskHandle */
-  txTaskHandleHandle = osThreadNew(StartTxTask, NULL, &txTaskHandle_attributes);
+  txTaskHandle = osThreadNew(StartTxTask, NULL, &txTaskHandle_attributes);
 
   /* creation of screenTaskHandl */
-  screenTaskHandlHandle = osThreadNew(StartScreenTask, NULL, &screenTaskHandl_attributes);
+  screenTaskHandle = osThreadNew(StartScreenTask, NULL, &screenTaskHandle_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
