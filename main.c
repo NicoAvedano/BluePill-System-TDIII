@@ -52,7 +52,7 @@ volatile uint32_t last_receive_time = 0;
 BMP280_t bmp;
 BMP280_Data_t bmp_data;
 
-uint8_t pantalla_estado = 0;
+uint8_t pantalla_estado = 5;
 static uint8_t boton_anterior = 1;
 uint8_t boton_actual;
 /* USER CODE END PM */
@@ -74,7 +74,13 @@ DMA_HandleTypeDef hdma_usart1_tx;
 DMA_HandleTypeDef hdma_usart3_tx;
 DMA_HandleTypeDef hdma_usart3_rx;
 
-
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for rxTaskHandle */
 osThreadId_t rxTaskHandle;
 const osThreadAttr_t rxTaskHandle_attributes = {
@@ -243,11 +249,11 @@ void actualizarPantalla(void){
 			break;
 		case 5:
 			SSD1306_GotoXY(40, 0); SSD1306_Puts("SALIDAS", &Font_7x10, 1);
-			sprintf(buffer, "PWM1: %u", ((tx_buf[1]<<4) | (tx_buf[2]>>4)));
+			sprintf(buffer, "PWM1:%u", ((tx_buf[1]<<4) | (tx_buf[2]>>4)));
 			SSD1306_GotoXY(0, 10); SSD1306_Puts(buffer, &Font_7x10, 1);
-			sprintf(buffer, "PWM2: %u", (((tx_buf[2] & 0x0F) <<8) | (tx_buf[3])));
+			sprintf(buffer, "PWM2:%u", (((tx_buf[2] & 0x0F) <<8) | (tx_buf[3])));
 			SSD1306_GotoXY(0, 20); SSD1306_Puts(buffer, &Font_7x10, 1);
-			sprintf(buffer, "Digitales: %u", (tx_buf[4]>>4) & 0x0F);
+			sprintf(buffer, "Digitales:%u", (tx_buf[4]>>4) & 0x0F);
 			SSD1306_GotoXY(0, 30); SSD1306_Puts(buffer, &Font_7x10, 1);
 			uint16_t temp1 = bmp_data.temperature;
 			sprintf(buffer, "Temperatura:%u.%02uC", temp1 / 100, temp1 % 100);
@@ -274,6 +280,13 @@ void actualizarPantalla(void){
 	SSD1306_UpdateScreen();
 }
 
+void funcion_X(){
+	SSD1306_Clear();
+	SSD1306_GotoXY(0, 0); SSD1306_Puts("Cargando", &Font_11x18, 1);
+	SSD1306_GotoXY(0, 20); SSD1306_Puts("Datos en", &Font_11x18, 1);
+	SSD1306_GotoXY(0, 40); SSD1306_Puts("Memoria...", &Font_11x18, 1);
+	SSD1306_UpdateScreen();
+}
 void Set_PWM(uint16_t ch1, uint16_t ch2)
 {
   uint16_t duty1 = ch1;
@@ -341,6 +354,8 @@ void doBuffer(){
 	 // Escalar presión (Pascal a 0-255 para 800hPa - 1100hPa aprox.)
 	 uint32_t pressure_hpa = bmp_data.pressure / 100; // de Pa a hPa
 
+
+
 		 tx_buf[0] = 0xA5;
 		 tx_buf[1] = pwm1>>4;
 		 tx_buf[2] = (pwm1<<4) | (pwm2>>8);
@@ -360,10 +375,10 @@ void doBuffer(){
 		 tx_buf[14] = pressure_hpa;
 		 tx_buf[15] = 0;
 
-		// tx_buf[15] = calcular_crc8(tx_buf, 15);
-	for(int i = 0; i<=13; i++){
+		 tx_buf[15] = calcular_crc8(tx_buf, 15);
+	/*for(int i = 0; i<=13; i++){
 		 tx_buf[15] |= tx_buf[i];
-	 }
+	 }*/
 	 actualizarPantalla();
 	 osMutexRelease(mutexBufferHandle);
 }
@@ -435,8 +450,8 @@ void StartRxTask(void *arg) {
 }
 void StartTxTask(void *arg) {
     for (;;) {
-        if ((osKernelGetTickCount() - last_receive_time) >= 20000) {
-            pantalla_estado = 5;
+        if ((osKernelGetTickCount() - last_receive_time) >= 5000) {
+            //pantalla_estado = 5;
         	doBuffer();
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
             HAL_UART_Transmit_DMA(uart, tx_buf, 16);
@@ -446,7 +461,40 @@ void StartTxTask(void *arg) {
     }
 }
 void StartScreenTask(void *arg) {
+	uint32_t boton_presionado_tiempo = 0;
+	const uint32_t TIEMPO_LARGO_MS = 2000; // 3 segundos
+
     for (;;) {
+        boton_actual = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11);
+
+        if (boton_anterior == 1 && boton_actual == 0) {
+            boton_presionado_tiempo = osKernelGetTickCount();
+        }
+
+        if (boton_anterior == 0 && boton_actual == 0) {
+            uint32_t duracion = osKernelGetTickCount() - boton_presionado_tiempo;
+            if (duracion >= TIEMPO_LARGO_MS) {
+                funcion_X();
+                while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11) == GPIO_PIN_RESET) {
+                osDelay(10); // Espera a que suelte el botón
+                }
+                boton_anterior = 1;
+	            continue;
+	        }
+	    }
+
+	    if (boton_anterior == 0 && boton_actual == 1) {
+            pantalla_estado = (pantalla_estado + 1) % 7;
+            doBuffer();
+            HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+        }
+
+        boton_anterior = boton_actual;
+        osDelay(50);
+    }
+
+
+	/*   for (;;) {
         boton_actual = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11);
         if (boton_anterior == 1 && boton_actual == 0) {
             pantalla_estado = (pantalla_estado + 1) % 7;
@@ -454,9 +502,8 @@ void StartScreenTask(void *arg) {
             HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
         }
         boton_anterior = boton_actual;
-        osDelay(100);
-    }
-}
+        osDelay(100);*/
+ }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == uart) {
@@ -538,38 +585,38 @@ int main(void)
   /* creation of mutexBufferHandle */
   mutexBufferHandle = osMutexNew(&mutexBufferHandle_attributes);
 
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
+    /* USER CODE BEGIN RTOS_MUTEX */
+    /* add mutexes, ... */
+    /* USER CODE END RTOS_MUTEX */
 
-  /* Create the semaphores(s) */
-  /* creation of semRxHandle */
-  semRxHandle = osSemaphoreNew(1, 0, &semRxHandle_attributes);
+    /* Create the semaphores(s) */
+    /* creation of semRxHandle */
+    semRxHandle = osSemaphoreNew(1, 0, &semRxHandle_attributes);
 
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
+    /* USER CODE BEGIN RTOS_SEMAPHORES */
+    /* add semaphores, ... */
+    /* USER CODE END RTOS_SEMAPHORES */
 
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
+    /* USER CODE BEGIN RTOS_TIMERS */
+    /* start timers, add new ones, ... */
+    /* USER CODE END RTOS_TIMERS */
 
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
+    /* USER CODE BEGIN RTOS_QUEUES */
+    /* add queues, ... */
+    /* USER CODE END RTOS_QUEUES */
 
-  /* Create the thread(s) */
-  /* creation of defaultTask */
+    /* Create the thread(s) */
+    /* creation of defaultTask */
+    defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
+      /* creation of rxTaskHandle */
+      rxTaskHandle = osThreadNew(StartRxTask, NULL, &rxTaskHandle_attributes);
 
-  /* creation of rxTaskHandle */
-  rxTaskHandle = osThreadNew(StartRxTask, NULL, &rxTaskHandle_attributes);
+      /* creation of txTaskHandle */
+      txTaskHandle = osThreadNew(StartTxTask, NULL, &txTaskHandle_attributes);
 
-  /* creation of txTaskHandle */
-  txTaskHandle = osThreadNew(StartTxTask, NULL, &txTaskHandle_attributes);
-
-  /* creation of screenTaskHandl */
-  screenTaskHandle = osThreadNew(StartScreenTask, NULL, &screenTaskHandle_attributes);
+      /* creation of screenTaskHandl */
+      screenTaskHandle = osThreadNew(StartScreenTask, NULL, &screenTaskHandle_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
